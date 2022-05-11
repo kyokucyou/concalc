@@ -1,6 +1,7 @@
 // Copyright (C) 2022 kyokucyou
 
 use std::{
+    clone::Clone,
     collections::HashMap,
     error::Error,
     f64::consts::{E, PI},
@@ -9,6 +10,12 @@ use std::{
     iter::from_fn,
     str::{Chars, FromStr},
 };
+
+struct RingBuf<T> {
+    buf: Vec<T>,
+    pos: isize,
+    size: usize,
+}
 
 #[derive(Debug)]
 struct ParseError {
@@ -36,7 +43,33 @@ struct Parser<'a> {
     chars: Chars<'a>,
     tok_buf: Vec<Token>,
     var_map: &'a mut HashMap<String, f64>,
+    history: &'a mut RingBuf<f64>,
     ch_buf: Option<char>,
+}
+
+impl<T> RingBuf<T>
+where
+    T: Default + Clone,
+{
+    fn new(size: usize) -> Self {
+        Self {
+            buf: vec![T::default(); size],
+            pos: 0,
+            size,
+        }
+    }
+
+    fn get(&self, n_back: isize) -> T {
+        let s = self.size as isize;
+        let idx = ((self.pos - n_back) % s + s) % s;
+        self.buf[idx as usize].clone()
+    }
+
+    fn put(&mut self, val: T) {
+        let idx = self.pos;
+        self.pos = (self.pos + 1) % (self.size as isize);
+        self.buf[idx as usize] = val;
+    }
 }
 
 impl Token {
@@ -76,11 +109,16 @@ impl Display for ParseError {
 }
 
 impl<'a> Parser<'a> {
-    fn new(inp: &'a str, environment: &'a mut HashMap<String, f64>) -> Self {
+    fn new(
+        inp: &'a str,
+        environment: &'a mut HashMap<String, f64>,
+        history: &'a mut RingBuf<f64>,
+    ) -> Self {
         Self {
             chars: inp.chars(),
             tok_buf: Vec::new(),
             var_map: environment,
+            history,
             ch_buf: None,
         }
     }
@@ -214,6 +252,7 @@ impl<'a> Parser<'a> {
             "sin" => params[0].sin(),
             "cos" => params[0].cos(),
             "tan" => params[0].tan(),
+            "last" => self.history.get(params[0] as isize),
             _ => {
                 return Err(Box::new(ParseError::new(
                     "unknown function or bad parameter count",
@@ -323,6 +362,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut stdout = stdout();
     let mut lines = stdin.lines();
     let mut environment = create_environment();
+    let mut history = RingBuf::new(10);
     println!("Welcome to the console calculator! Enter \".quit\" to quit.");
     loop {
         print!("> ");
@@ -341,10 +381,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             ".quit" => break,
             _ => {}
         }
-        let mut parser = Parser::new(&line, &mut environment);
+        let mut parser = Parser::new(&line, &mut environment, &mut history);
         match parser.parse() {
             Ok(Some(x)) => {
                 println!("Result: {}", x);
+                parser.history.put(x);
                 if !parser.is_eof() {
                     println!("Warning: Superfluous input is ignored.");
                 }
