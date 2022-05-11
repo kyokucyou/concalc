@@ -346,7 +346,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             Ok(Some(x)) => {
                 println!("Result: {}", x);
                 if !parser.is_eof() {
-                    println!("Warning: Superflous input is ignored.");
+                    println!("Warning: Superfluous input is ignored.");
                 }
             }
             Ok(_) => {}
