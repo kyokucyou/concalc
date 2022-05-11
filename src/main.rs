@@ -241,7 +241,7 @@ impl<'a> Parser<'a> {
                 Ok(x)
             }
             Token::Minus => {
-                let x = self.parse_expr()?;
+                let x = self.parse_primary()?;
                 Ok(-x)
             }
             _ => Err(Box::new(ParseError::new("expected primary"))),
