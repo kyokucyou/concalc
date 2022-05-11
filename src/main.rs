@@ -85,6 +85,13 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn is_eof(&mut self) -> bool {
+        match self.tok_buf.pop() {
+            Some(_) => false,
+            _ => !matches!(self.lex(), Ok(Some(_))),
+        }
+    }
+
     fn peek_char(&mut self) -> Option<char> {
         match self.ch_buf {
             some @ Some(_) => some,
@@ -110,9 +117,9 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn read_while<T>(&mut self, mut f: T) -> String
+    fn read_while<T>(&mut self, f: T) -> String
     where
-        T: FnMut(char) -> bool,
+        T: Fn(char) -> bool,
     {
         let mut last = None;
         let s = from_fn(|| {
@@ -336,7 +343,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         let mut parser = Parser::new(&line, &mut environment);
         match parser.parse() {
-            Ok(Some(x)) => println!("Result: {}", x),
+            Ok(Some(x)) => {
+                println!("Result: {}", x);
+                if !parser.is_eof() {
+                    println!("Warning: Superflous input is ignored.");
+                }
+            }
             Ok(_) => {}
             Err(e) => println!("Error: {}", e),
         }
