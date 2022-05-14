@@ -1,5 +1,7 @@
 // Copyright (C) 2022 kyokucyou
 
+use crate::{Either::*, Identifier::*};
+
 use std::{
     clone::Clone,
     collections::HashMap,
@@ -10,6 +12,11 @@ use std::{
     iter::from_fn,
     str::{Chars, FromStr},
 };
+
+enum Either<L, R> {
+    Left(L),
+    Right(R),
+}
 
 struct RingBuf<T> {
     buf: Vec<T>,
@@ -24,6 +31,7 @@ struct ParseError {
 
 #[derive(Debug)]
 enum Token {
+    Call(String, Vec<Node>),
     Identifier(String),
     Number(f64),
     LParen,
@@ -37,12 +45,27 @@ enum Token {
     Caret,
 }
 
+#[derive(Debug)]
+struct Node {
+    tok: Token,
+    left: Option<Box<Node>>,
+    right: Option<Box<Node>>,
+}
+
+enum Identifier {
+    Variable(f64),
+    Function(Node, Vec<String>),
+}
+
 type ParseResult = Result<f64, Box<dyn Error>>;
+type NodeResult = Result<Node, Box<dyn Error>>;
+
+type Environment = HashMap<String, Identifier>;
 
 struct Parser<'a> {
     chars: Chars<'a>,
     tok_buf: Vec<Token>,
-    var_map: &'a mut HashMap<String, f64>,
+    var_map: &'a mut Environment,
     history: &'a mut RingBuf<f64>,
     ch_buf: Option<char>,
 }
@@ -94,6 +117,103 @@ impl Token {
     }
 }
 
+impl Node {
+    fn new(tok: Token, left: Box<Node>, right: Box<Node>) -> Self {
+        Self {
+            tok,
+            left: Some(left),
+            right: Some(right),
+        }
+    }
+
+    fn new_maybe(
+        tok: Token,
+        left: Option<Box<Node>>,
+        right: Option<Box<Node>>,
+    ) -> Self {
+        Self { tok, left, right }
+    }
+
+    fn from_tok(tok: Token) -> Self {
+        Self::new_maybe(tok, None, None)
+    }
+
+    fn from_num(num: f64) -> Self {
+        Self::from_tok(Token::Number(num))
+    }
+
+    fn evaluate(
+        &self,
+        scopes: &Vec<&Environment>,
+    ) -> Result<f64, &'static str> {
+        match &self.tok {
+            Token::Call(id, args) => {
+                let f = scopes
+                    .iter()
+                    .filter_map(|m| m.get(id))
+                    .last()
+                    .ok_or("no such function")?;
+                match f {
+                    Function(f, arg_names) => {
+                        let param_scope = arg_names
+                            .iter()
+                            .zip(args.iter().map(|a| {
+                                a.evaluate(&scopes)
+                                    .and_then(|v| Ok(Variable(v)))
+                            }))
+                            .map(|(a, b)| match b {
+                                Ok(v) => Ok((a.clone(), v)),
+                                _ => Err("error evaluating parameter"),
+                            })
+                            .collect::<Result<_, _>>()?;
+                        let mut scopes = scopes.clone();
+                        scopes.push(&param_scope);
+                        f.evaluate(&scopes)
+                    }
+                    _ => Err("not a function"),
+                }
+            }
+            Token::Identifier(id) => Ok(*scopes
+                .iter()
+                .filter_map(|m| match m.get(id) {
+                    Some(Variable(x)) => Some(x),
+                    _ => None,
+                })
+                .last()
+                .ok_or("no such variable")?),
+            Token::Number(n) => Ok(*n),
+            Token::Minus if matches!(self.right, None) => {
+                let lhs = self
+                    .left
+                    .as_ref()
+                    .ok_or("left argument required")?
+                    .evaluate(scopes)?;
+                Ok(-lhs)
+            }
+            _ => {
+                let lhs = self
+                    .left
+                    .as_ref()
+                    .ok_or("left argument required")?
+                    .evaluate(scopes)?;
+                let rhs = self
+                    .right
+                    .as_ref()
+                    .ok_or("right argument required")?
+                    .evaluate(scopes)?;
+                Ok(match self.tok {
+                    Token::Plus => lhs + rhs,
+                    Token::Minus => lhs - rhs,
+                    Token::Asterisk => lhs * rhs,
+                    Token::Slash => lhs / rhs,
+                    Token::Caret => lhs.powf(rhs),
+                    _ => return Err("invalid operator"),
+                })
+            }
+        }
+    }
+}
+
 impl ParseError {
     fn new(msg: &'static str) -> Self {
         Self { msg }
@@ -111,7 +231,7 @@ impl Display for ParseError {
 impl<'a> Parser<'a> {
     fn new(
         inp: &'a str,
-        environment: &'a mut HashMap<String, f64>,
+        environment: &'a mut Environment,
         history: &'a mut RingBuf<f64>,
     ) -> Self {
         Self {
@@ -223,7 +343,22 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_function(&mut self, name: &String) -> ParseResult {
+    fn lex_record<'b>(
+        &mut self,
+        buf: &'b mut Vec<Token>,
+    ) -> Result<&'b Token, Box<dyn Error>> {
+        let tok = self.lex_some()?;
+        buf.push(tok);
+        return Ok(buf.last().unwrap());
+    }
+
+    fn evaluate(&self, n: &Node) -> ParseResult {
+        let scopes = vec![&*self.var_map];
+        Ok(n.evaluate(&scopes)
+            .map_err(|msg| Box::new(ParseError::new(msg)))?)
+    }
+
+    fn parse_function_ast(&mut self, name: &String) -> NodeResult {
         let mut params = Vec::new();
         loop {
             let tok = self.lex_some()?;
@@ -231,7 +366,7 @@ impl<'a> Parser<'a> {
                 Token::RParen => break,
                 _ => self.tok_buf.push(tok),
             }
-            let x = self.parse_expr()?;
+            let x = self.parse_expr_ast()?;
             params.push(x);
             let tok = self.lex_some()?;
             match tok {
@@ -240,66 +375,44 @@ impl<'a> Parser<'a> {
                 _ => return Err(Box::new(ParseError::new("missing comma"))),
             }
         }
-        let cnt = params.len();
-        if cnt == 0 {
-            return Err(Box::new(ParseError::new("no parameters provided")));
-        }
-        Ok(match name.as_str() {
-            "log" if cnt == 1 => params[0].ln(),
-            "log" if cnt == 2 => params[0].log(params[1]),
-            "rad" => params[0] * PI / 180.0,
-            "deg" => params[0] * 180.0 / PI,
-            "sin" => params[0].sin(),
-            "cos" => params[0].cos(),
-            "tan" => params[0].tan(),
-            "last" => self.history.get(params[0] as isize),
-            _ => {
-                return Err(Box::new(ParseError::new(
-                    "unknown function or bad parameter count",
-                )))
-            }
-        })
+        Ok(Node::from_tok(Token::Call(name.clone(), params)))
     }
 
-    fn parse_primary(&mut self) -> ParseResult {
+    fn parse_primary_ast(&mut self) -> NodeResult {
         let tok = self.lex_some()?;
         match tok {
-            Token::Identifier(id) => {
+            Token::Identifier(ref id) => {
                 if let Some(t) = self.lex()? {
                     if let Token::LParen = t {
-                        return self.parse_function(&id);
+                        return self.parse_function_ast(id);
                     }
                     self.tok_buf.push(t);
                 }
-                if let Some(&x) = self.var_map.get(&id) {
-                    Ok(x)
-                } else {
-                    Err(Box::new(ParseError::new("unknown variable")))
-                }
+                Ok(Node::from_tok(tok))
             }
-            Token::Number(x) => Ok(x),
+            Token::Number(_) => Ok(Node::from_tok(tok)),
             Token::LParen => {
-                let x = self.parse_expr()?;
+                let x = self.parse_expr_ast()?;
                 match self.lex_some()? {
                     Token::RParen => {}
-                    _ => return Err(Box::new(ParseError::new("missing ')'"))),
+                    _ => return Err(Box::new(ParseError::new("missing ')"))),
                 }
                 Ok(x)
             }
             Token::Minus => {
-                let x = self.parse_primary()?;
-                Ok(-x)
+                let x = self.parse_primary_ast()?;
+                Ok(Node::new_maybe(tok, Some(Box::new(x)), None))
             }
             _ => Err(Box::new(ParseError::new("expected primary"))),
         }
     }
 
-    fn parse_expr(&mut self) -> ParseResult {
-        self.parse_expression(0)
+    fn parse_expr_ast(&mut self) -> NodeResult {
+        self.parse_expression_ast(0)
     }
 
-    fn parse_expression(&mut self, precedence: u32) -> ParseResult {
-        let mut lhs = self.parse_primary()?;
+    fn parse_expression_ast(&mut self, precedence: u32) -> NodeResult {
+        let mut lhs = self.parse_primary_ast()?;
         loop {
             match self.lex()? {
                 Some(tok) => {
@@ -308,15 +421,8 @@ impl<'a> Parser<'a> {
                         self.tok_buf.push(tok);
                         break;
                     }
-                    let rhs = self.parse_expression(prec + 1)?;
-                    lhs = match tok {
-                        Token::Plus => lhs + rhs,
-                        Token::Minus => lhs - rhs,
-                        Token::Asterisk => lhs * rhs,
-                        Token::Slash => lhs / rhs,
-                        Token::Caret => lhs.powf(rhs),
-                        _ => panic!("internal parsing error"),
-                    };
+                    let rhs = self.parse_expression_ast(prec + 1)?;
+                    lhs = Node::new(tok, Box::new(lhs), Box::new(rhs));
                 }
                 _ => break,
             }
@@ -324,15 +430,57 @@ impl<'a> Parser<'a> {
         Ok(lhs)
     }
 
-    fn parse(&mut self) -> Result<Option<f64>, Box<dyn Error>> {
+    fn try_parse_fn_decl(
+        &mut self,
+    ) -> Result<Either<Vec<Token>, Identifier>, Box<dyn Error>> {
+        let mut args = Vec::new();
+        let mut buf = Vec::new();
+        loop {
+            match self.lex_record(&mut buf)? {
+                Token::Identifier(id) => args.push(id.to_string()),
+                Token::RParen => break,
+                _ => return Ok(Left(buf)),
+            }
+            match self.lex_record(&mut buf)? {
+                Token::Comma => {}
+                Token::RParen => break,
+                _ => return Ok(Left(buf)),
+            }
+        }
+        match self.lex()? {
+            Some(Token::Equals) => {}
+            Some(tok) => {
+                buf.push(tok);
+                return Ok(Left(buf));
+            }
+            _ => return Ok(Left(buf)),
+        }
+        let n = self.parse_expr_ast()?;
+        Ok(Right(Function(n, args)))
+    }
+
+    fn parse_ast(&mut self) -> Result<Option<f64>, Box<dyn Error>> {
         Ok(match self.lex()? {
             Some(tok) => {
                 match tok {
                     Token::Identifier(ref id) => match self.lex()? {
                         Some(Token::Equals) => {
-                            let x = self.parse_expr()?;
-                            self.var_map.insert(id.to_string(), x);
+                            let n = self.parse_expr_ast()?;
+                            let x = self.evaluate(&n)?;
+                            self.var_map.insert(id.to_string(), Variable(x));
                             return Ok(Some(x));
+                        }
+                        Some(Token::LParen) => {
+                            match self.try_parse_fn_decl()? {
+                                Left(buf) => self.tok_buf.append(
+                                    &mut buf.into_iter().rev().collect(),
+                                ),
+                                Right(func) => {
+                                    self.var_map.insert(id.to_string(), func);
+                                    return Ok(None);
+                                }
+                            }
+                            self.tok_buf.push(Token::LParen);
                         }
                         Some(la) => {
                             self.tok_buf.push(la);
@@ -342,18 +490,19 @@ impl<'a> Parser<'a> {
                     _ => {}
                 }
                 self.tok_buf.push(tok);
-                Some(self.parse_expr()?)
+                let n = self.parse_expr_ast()?;
+                Some(self.evaluate(&n)?)
             }
             _ => None,
         })
     }
 }
 
-fn create_environment() -> HashMap<String, f64> {
+fn create_environment() -> Result<Environment, Box<dyn Error>> {
     let mut m = HashMap::new();
-    m.insert("e".into(), E);
-    m.insert("pi".into(), PI);
-    m
+    m.insert("e".into(), Variable(E));
+    m.insert("pi".into(), Variable(PI));
+    Ok(m)
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -361,7 +510,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let stdin = stdin.lock();
     let mut stdout = stdout();
     let mut lines = stdin.lines();
-    let mut environment = create_environment();
+    let mut environment = create_environment()?;
     let mut history = RingBuf::new(10);
     println!("Welcome to the console calculator! Enter \".quit\" to quit.");
     loop {
@@ -374,7 +523,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         match line.as_str() {
             ".env" => {
                 for (k, v) in environment.iter() {
-                    println!("\t{:-10} = {}", k, v);
+                    if let Variable(v) = v {
+                        println!("\t{:-10} = {}", k, v);
+                    }
                 }
                 continue;
             }
@@ -382,12 +533,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             _ => {}
         }
         let mut parser = Parser::new(&line, &mut environment, &mut history);
-        match parser.parse() {
+        match parser.parse_ast() {
             Ok(Some(x)) => {
                 println!("Result: {}", x);
                 parser.history.put(x);
                 if !parser.is_eof() {
-                    println!("Warning: Superfluous input is ignored.");
+                    println!("Warning: superfluous input is ignored.");
                 }
             }
             Ok(_) => {}
