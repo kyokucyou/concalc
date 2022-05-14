@@ -55,6 +55,7 @@ struct Node {
 enum Identifier {
     Variable(f64),
     Function(Node, Vec<String>),
+    Builtin(Box<dyn Fn(Vec<f64>) -> f64>, usize),
 }
 
 type ParseResult = Result<f64, Box<dyn Error>>;
@@ -169,6 +170,16 @@ impl Node {
                         let mut scopes = scopes.clone();
                         scopes.push(&param_scope);
                         f.evaluate(&scopes)
+                    }
+                    Builtin(f, n_args) => {
+                        if args.len() < *n_args {
+                            return Err("not enough arguments to function");
+                        }
+                        let args = args
+                            .into_iter()
+                            .map(|a| a.evaluate(scopes))
+                            .collect::<Result<_, _>>()?;
+                        Ok(f(args))
                     }
                     _ => Err("not a function"),
                 }
@@ -498,10 +509,23 @@ impl<'a> Parser<'a> {
     }
 }
 
+macro_rules! def_fn {
+    ($env:ident, $name:literal, $n_args:literal, $expr:expr) => {
+        $env.insert($name.into(), Builtin(Box::new($expr), $n_args));
+    };
+}
+
 fn create_environment() -> Result<Environment, Box<dyn Error>> {
     let mut m = HashMap::new();
     m.insert("e".into(), Variable(E));
     m.insert("pi".into(), Variable(PI));
+    def_fn!(m, "ln", 1, |v| v[0].ln());
+    def_fn!(m, "log", 2, |v| v[0].log(v[1]));
+    def_fn!(m, "rad", 1, |v| v[0] * PI / 180.0);
+    def_fn!(m, "deg", 1, |v| v[0] * 180.0 / PI);
+    def_fn!(m, "sin", 1, |v| v[0].sin());
+    def_fn!(m, "cos", 1, |v| v[0].cos());
+    def_fn!(m, "tan", 1, |v| v[0].tan());
     Ok(m)
 }
 
@@ -523,8 +547,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         match line.as_str() {
             ".env" => {
                 for (k, v) in environment.iter() {
-                    if let Variable(v) = v {
-                        println!("\t{:-10} = {}", k, v);
+                    match v {
+                        Variable(v) => println!("\t{:-10} = {}", k, v),
+                        Function(_, _) => println!("\t{:-10} = (function)", k),
+                        Builtin(_, _) => {
+                            println!("\t{:-10} = (built-in function)", k)
+                        }
                     }
                 }
                 continue;
