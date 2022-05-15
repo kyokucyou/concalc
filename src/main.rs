@@ -26,7 +26,7 @@ struct RingBuf<T> {
 
 #[derive(Debug)]
 struct ParseError {
-    msg: &'static str,
+    msg: String,
 }
 
 #[derive(Debug)]
@@ -143,17 +143,14 @@ impl Node {
         Self::from_tok(Token::Number(num))
     }
 
-    fn evaluate(
-        &self,
-        scopes: &Vec<&Environment>,
-    ) -> Result<f64, &'static str> {
+    fn evaluate(&self, scopes: &Vec<&Environment>) -> Result<f64, String> {
         match &self.tok {
             Token::Call(id, args) => {
                 let f = scopes
                     .iter()
                     .filter_map(|m| m.get(id))
                     .last()
-                    .ok_or("no such function")?;
+                    .ok_or(format!("unknown function: '{}'", id))?;
                 match f {
                     Function(f, arg_names) => {
                         let param_scope = arg_names
@@ -164,7 +161,10 @@ impl Node {
                             }))
                             .map(|(a, b)| match b {
                                 Ok(v) => Ok((a.clone(), v)),
-                                _ => Err("error evaluating parameter"),
+                                _ => Err(format!(
+                                    "error evaluating parameter '{}'",
+                                    a
+                                )),
                             })
                             .collect::<Result<_, _>>()?;
                         let mut scopes = scopes.clone();
@@ -173,7 +173,10 @@ impl Node {
                     }
                     Builtin(f, n_args) => {
                         if args.len() < *n_args {
-                            return Err("not enough arguments to function");
+                            return Err(format!(
+                                "not enough arguments to function {}()",
+                                id
+                            ));
                         }
                         let args = args
                             .into_iter()
@@ -181,7 +184,7 @@ impl Node {
                             .collect::<Result<_, _>>()?;
                         Ok(f(args))
                     }
-                    _ => Err("not a function"),
+                    _ => Err(format!("not a function: '{}'", id)),
                 }
             }
             Token::Identifier(id) => Ok(*scopes
@@ -191,7 +194,7 @@ impl Node {
                     _ => None,
                 })
                 .last()
-                .ok_or("no such variable")?),
+                .ok_or(format!("unknown variable: '{}'", id))?),
             Token::Number(n) => Ok(*n),
             Token::Minus if matches!(self.right, None) => {
                 let lhs = self
@@ -218,7 +221,7 @@ impl Node {
                     Token::Asterisk => lhs * rhs,
                     Token::Slash => lhs / rhs,
                     Token::Caret => lhs.powf(rhs),
-                    _ => return Err("invalid operator"),
+                    _ => return Err("invalid operator".to_string()),
                 })
             }
         }
@@ -227,6 +230,12 @@ impl Node {
 
 impl ParseError {
     fn new(msg: &'static str) -> Self {
+        Self {
+            msg: msg.to_string(),
+        }
+    }
+
+    fn from_string(msg: String) -> Self {
         Self { msg }
     }
 }
@@ -366,7 +375,7 @@ impl<'a> Parser<'a> {
     fn evaluate(&self, n: &Node) -> ParseResult {
         let scopes = vec![&*self.var_map];
         Ok(n.evaluate(&scopes)
-            .map_err(|msg| Box::new(ParseError::new(msg)))?)
+            .map_err(|msg| Box::new(ParseError::from_string(msg)))?)
     }
 
     fn parse_function_ast(&mut self, name: &String) -> NodeResult {
@@ -549,8 +558,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                 for (k, v) in environment.iter() {
                     match v {
                         Variable(v) => println!("\t{:-10} = {}", k, v),
-                        Function(_, _) => println!("\t{:-10} = (function)", k),
-                        Builtin(_, _) => {
+                        Function(..) => println!("\t{:-10} = (function)", k),
+                        Builtin(..) => {
                             println!("\t{:-10} = (built-in function)", k)
                         }
                     }
