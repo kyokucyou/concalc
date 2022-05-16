@@ -43,8 +43,7 @@ enum Token {
 #[derive(Debug)]
 struct Node {
     tok: Token,
-    left: Option<Box<Node>>,
-    right: Option<Box<Node>>,
+    children: Vec<Box<Node>>,
 }
 
 enum Identifier {
@@ -89,11 +88,10 @@ impl Token {
 
 impl Node {
     fn new(tok: Token, left: Box<Node>, right: Box<Node>) -> Self {
-        Self {
-            tok,
-            left: Some(left),
-            right: Some(right),
-        }
+        let mut v = Vec::new();
+        v.push(left);
+        v.push(right);
+        Self { tok, children: v }
     }
 
     fn new_maybe(
@@ -101,7 +99,14 @@ impl Node {
         left: Option<Box<Node>>,
         right: Option<Box<Node>>,
     ) -> Self {
-        Self { tok, left, right }
+        let mut v = Vec::new();
+        if let Some(n) = left {
+            v.push(n);
+        }
+        if let Some(n) = right {
+            v.push(n);
+        }
+        Self { tok, children: v }
     }
 
     fn from_tok(tok: Token) -> Self {
@@ -161,25 +166,19 @@ impl Node {
                 .last()
                 .ok_or(format!("unknown variable: '{}'", id))?),
             Token::Number(n) => Ok(*n),
-            Token::Minus if matches!(self.right, None) => {
-                let lhs = self
-                    .left
-                    .as_ref()
-                    .ok_or("left argument required")?
-                    .evaluate(scopes)?;
+            Token::Minus if self.children.len() == 1 => {
+                let lhs = self.children[0].evaluate(scopes)?;
                 Ok(-lhs)
             }
             _ => {
-                let lhs = self
-                    .left
-                    .as_ref()
-                    .ok_or("left argument required")?
-                    .evaluate(scopes)?;
-                let rhs = self
-                    .right
-                    .as_ref()
-                    .ok_or("right argument required")?
-                    .evaluate(scopes)?;
+                if self.children.len() != 2 {
+                    return Err(
+                        "invalid number of operands to binary operator"
+                            .to_string(),
+                    );
+                }
+                let lhs = self.children[0].evaluate(scopes)?;
+                let rhs = self.children[1].evaluate(scopes)?;
                 Ok(match self.tok {
                     Token::Plus => lhs + rhs,
                     Token::Minus => lhs - rhs,
