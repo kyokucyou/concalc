@@ -495,6 +495,13 @@ fn create_environment() -> Result<Environment, Box<dyn Error>> {
     def_fn!(m, "sin", 1, |v| v[0].sin());
     def_fn!(m, "cos", 1, |v| v[0].cos());
     def_fn!(m, "tan", 1, |v| v[0].tan());
+    def_fn!(m, "if", 3, |v| {
+        if v[0] == 0.0 {
+            v[2]
+        } else {
+            v[1]
+        }
+    });
     Ok(m)
 }
 
