@@ -142,7 +142,7 @@ impl Node {
                         f.evaluate(&scopes)
                     }
                     Builtin(f, n_args) => {
-                        if args.len() < *n_args {
+                        if *n_args != 0 && args.len() < *n_args {
                             return Err(format!(
                                 "not enough arguments to function {}()",
                                 id
@@ -494,6 +494,12 @@ fn create_environment() -> Result<Environment, Box<dyn Error>> {
     def_fn!(m, "sin", 1, |v| v[0].sin());
     def_fn!(m, "cos", 1, |v| v[0].cos());
     def_fn!(m, "tan", 1, |v| v[0].tan());
+    def_fn!(m, "min", 0, |v| v
+        .iter()
+        .fold(f64::INFINITY, |a, &b| { f64::min(a, b) }));
+    def_fn!(m, "max", 0, |v| v
+        .iter()
+        .fold(f64::NEG_INFINITY, |a, &b| { f64::max(a, b) }));
     def_fn!(m, "if", 3, |v| {
         if v[0] == 0.0 {
             v[2]
