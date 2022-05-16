@@ -8,7 +8,8 @@ use std::{
     error::Error,
     f64::consts::{E, PI},
     fmt::{self, Display, Formatter},
-    io::{stdin, stdout, BufRead, Write},
+    fs::File,
+    io::{stdin, stdout, BufRead, BufReader, Write},
     iter::from_fn,
     str::{Chars, FromStr},
 };
@@ -497,6 +498,26 @@ fn create_environment() -> Result<Environment, Box<dyn Error>> {
     Ok(m)
 }
 
+fn read_file(
+    filename: String,
+    environment: &mut Environment,
+) -> Result<(), Box<dyn Error>> {
+    let file = File::open(filename)?;
+    let reader = BufReader::new(file);
+    for (n, line) in reader.lines().enumerate() {
+        let line = line?;
+        let mut p = Parser::new(&line, environment);
+        match p.parse_ast() {
+            Err(e) => {
+                println!("Error in line {}", n + 1);
+                return Err(e.into());
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let stdin = stdin();
     let stdin = stdin.lock();
@@ -529,6 +550,18 @@ fn main() -> Result<(), Box<dyn Error>> {
                 environment = create_environment()?;
                 println!("Environment restored.");
                 continue;
+            }
+            ".source" => {
+                print!("Filename? ");
+                stdout.flush()?;
+                if let Some(filename) = lines.next() {
+                    match read_file(filename?, &mut environment) {
+                        Err(e) => println!("Error while reading file: {}", e),
+                        _ => println!("File sourced successfully."),
+                    }
+                    continue;
+                }
+                break;
             }
             _ => {}
         }
