@@ -18,12 +18,6 @@ enum Either<L, R> {
     Right(R),
 }
 
-struct RingBuf<T> {
-    buf: Vec<T>,
-    pos: isize,
-    size: usize,
-}
-
 #[derive(Debug)]
 struct ParseError {
     msg: String,
@@ -67,33 +61,7 @@ struct Parser<'a> {
     chars: Chars<'a>,
     tok_buf: Vec<Token>,
     var_map: &'a mut Environment,
-    history: &'a mut RingBuf<f64>,
     ch_buf: Option<char>,
-}
-
-impl<T> RingBuf<T>
-where
-    T: Default + Clone,
-{
-    fn new(size: usize) -> Self {
-        Self {
-            buf: vec![T::default(); size],
-            pos: 0,
-            size,
-        }
-    }
-
-    fn get(&self, n_back: isize) -> T {
-        let s = self.size as isize;
-        let idx = ((self.pos - n_back) % s + s) % s;
-        self.buf[idx as usize].clone()
-    }
-
-    fn put(&mut self, val: T) {
-        let idx = self.pos;
-        self.pos = (self.pos + 1) % (self.size as isize);
-        self.buf[idx as usize] = val;
-    }
 }
 
 impl Token {
@@ -137,10 +105,6 @@ impl Node {
 
     fn from_tok(tok: Token) -> Self {
         Self::new_maybe(tok, None, None)
-    }
-
-    fn from_num(num: f64) -> Self {
-        Self::from_tok(Token::Number(num))
     }
 
     fn evaluate(&self, scopes: &Vec<&Environment>) -> Result<f64, String> {
@@ -249,16 +213,11 @@ impl Display for ParseError {
 }
 
 impl<'a> Parser<'a> {
-    fn new(
-        inp: &'a str,
-        environment: &'a mut Environment,
-        history: &'a mut RingBuf<f64>,
-    ) -> Self {
+    fn new(inp: &'a str, environment: &'a mut Environment) -> Self {
         Self {
             chars: inp.chars(),
             tok_buf: Vec::new(),
             var_map: environment,
-            history,
             ch_buf: None,
         }
     }
@@ -544,7 +503,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut stdout = stdout();
     let mut lines = stdin.lines();
     let mut environment = create_environment()?;
-    let mut history = RingBuf::new(10);
     println!("Welcome to the console calculator! Enter \".quit\" to quit.");
     loop {
         print!("> ");
@@ -567,13 +525,18 @@ fn main() -> Result<(), Box<dyn Error>> {
                 continue;
             }
             ".quit" => break,
+            ".restore" => {
+                environment = create_environment()?;
+                println!("Environment restored.");
+                continue;
+            }
             _ => {}
         }
-        let mut parser = Parser::new(&line, &mut environment, &mut history);
+        let mut parser = Parser::new(&line, &mut environment);
         match parser.parse_ast() {
             Ok(Some(x)) => {
                 println!("Result: {}", x);
-                parser.history.put(x);
+                parser.var_map.insert("ans".to_string(), Variable(x));
                 if !parser.is_eof() {
                     println!("Warning: superfluous input is ignored.");
                 }
