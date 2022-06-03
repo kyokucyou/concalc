@@ -531,8 +531,7 @@ fn read_file(
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let stdin = stdin();
-    let stdin = stdin.lock();
+    let stdin = stdin().lock();
     let mut stdout = stdout();
     let mut lines = stdin.lines();
     let mut environment = create_environment()?;
