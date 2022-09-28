@@ -14,4 +14,4 @@ Console calculator written in Rust.
 ### Planned features
 - ...
 
-[^1]: Lexical scoping is supported. A new scope is created when a function is called, and its parameters are bound in this new scope. If less parameters than required are supplied to a user-defined functions, the parameters will be resolved within the next innermost scope instead, making it possible to use "global" variables.
+[^1]: Lexical scoping is supported. A new scope is created when a function is called, and its parameters are bound in this new scope. If less parameters than required are supplied to a user-defined functions, the parameters will be resolved within the next innermost scope instead, making it possible to use "global" variables as defaults for function parameters.
