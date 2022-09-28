@@ -10,6 +10,7 @@ Console calculator written in Rust.
   - angle conversion (deg, rad)
   - logarithm (for ln, pass only 1 parameter to log)
 - basic 4 arithmetic operations and exponentiation, respecting precedence
+- ability to save and load environment including user-defined variables and functions
 
 ### Planned features
 - ...

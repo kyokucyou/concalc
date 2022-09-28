@@ -1,6 +1,7 @@
 // Copyright (C) 2022 kyokucyou
 
 use crate::{Either::*, Identifier::*};
+use serde::{Deserialize, Serialize};
 
 use std::{
     clone::Clone,
@@ -9,7 +10,7 @@ use std::{
     f64::consts::{E, PI},
     fmt::{self, Display, Formatter},
     fs::File,
-    io::{stdin, stdout, BufRead, BufReader, Write},
+    io::{self, stdin, stdout, BufRead, BufReader, Write},
     iter::from_fn,
     str::{Chars, FromStr},
 };
@@ -24,7 +25,7 @@ struct ParseError {
     msg: String,
 }
 
-#[derive(Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 enum Token {
     Call(String, Vec<Node>),
     Identifier(String),
@@ -40,15 +41,17 @@ enum Token {
     Caret,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 struct Node {
     tok: Token,
     children: Vec<Box<Node>>,
 }
 
+#[derive(Serialize, Deserialize)]
 enum Identifier {
     Variable(f64),
     Function(Node, Vec<String>),
+    #[serde(skip)]
     Builtin(Box<dyn Fn(Vec<f64>) -> f64>, usize),
 }
 
@@ -510,6 +513,17 @@ fn create_environment() -> Result<Environment, Box<dyn Error>> {
     Ok(m)
 }
 
+fn clean_environment<'a>(
+    env: &'a Environment,
+) -> HashMap<&String, &Identifier> {
+    env.iter()
+        .filter(|(_, v)| match v {
+            Builtin(_, _) => false,
+            _ => true,
+        })
+        .collect()
+}
+
 fn read_file(
     filename: String,
     environment: &mut Environment,
@@ -535,12 +549,19 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut stdout = stdout();
     let mut lines = stdin.lines();
     let mut environment = create_environment()?;
+    let mut prompt = move |p| {
+        print!("{}", p);
+        stdout.flush()?;
+        let name = lines.next();
+        match name {
+            Some(s) => Ok::<_, io::Error>(Some(s?)),
+            _ => Ok(None),
+        }
+    };
     println!("Welcome to the console calculator! Enter \".quit\" to quit.");
     loop {
-        print!("> ");
-        stdout.flush()?;
-        let line = match lines.next() {
-            Some(l) => l?,
+        let line = match prompt("> ")? {
+            Some(l) => l,
             _ => break,
         };
         match line.as_str() {
@@ -563,13 +584,31 @@ fn main() -> Result<(), Box<dyn Error>> {
                 continue;
             }
             ".source" => {
-                print!("Filename? ");
-                stdout.flush()?;
-                if let Some(filename) = lines.next() {
-                    match read_file(filename?, &mut environment) {
+                if let Some(filename) = prompt("Filename? ")? {
+                    match read_file(filename, &mut environment) {
                         Err(e) => println!("Error while reading file: {}", e),
                         _ => println!("File sourced successfully."),
                     }
+                    continue;
+                }
+                break;
+            }
+            ".save" => {
+                if let Some(filename) = prompt("Filename? ")? {
+                    let env = clean_environment(&environment);
+                    let json = serde_json::to_string_pretty(&env)?;
+                    let mut file = File::create(filename)?;
+                    writeln!(file, "{}", json)?;
+                    continue;
+                }
+                break;
+            }
+            ".load" => {
+                if let Some(filename) = prompt("Filename? ")? {
+                    let file = File::open(filename)?;
+                    let file = BufReader::new(file);
+                    let env: Environment = serde_json::from_reader(file)?;
+                    environment.extend(env);
                     continue;
                 }
                 break;
