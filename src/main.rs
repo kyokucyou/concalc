@@ -53,6 +53,16 @@ enum Identifier {
     Function(Node, Vec<String>),
     #[serde(skip)]
     Builtin(Box<dyn Fn(Vec<f64>) -> f64>, usize),
+    #[serde(skip)]
+    BuiltinLazy(
+        Box<
+            dyn Fn(
+                &Vec<Node>,
+                &Vec<&Environment>,
+            ) -> Result<f64, Box<dyn Error>>,
+        >,
+        usize,
+    ),
 }
 
 type ParseResult = Result<f64, Box<dyn Error>>;
@@ -156,6 +166,22 @@ impl Node {
                             .map(|a| a.evaluate(scopes))
                             .collect::<Result<_, _>>()?;
                         Ok(f(args))
+                    }
+                    BuiltinLazy(f, n_args) => {
+                        if *n_args != 0 && args.len() < *n_args {
+                            return Err(format!(
+                                "not enough arguments to function {}()",
+                                id
+                            ));
+                        }
+                        let res = f(args, scopes);
+                        match res {
+                            Ok(r) => Ok(r),
+                            Err(e) => Err(format!(
+                                "error while evaluating lazy function: {}",
+                                e
+                            )),
+                        }
                     }
                     _ => Err(format!("not a function: '{}'", id)),
                 }
@@ -503,13 +529,19 @@ fn create_environment() -> Result<Environment, Box<dyn Error>> {
     def_fn!(m, "max", 0, |v| v
         .iter()
         .fold(f64::NEG_INFINITY, |a, &b| { f64::max(a, b) }));
-    def_fn!(m, "if", 3, |v| {
-        if v[0] == 0.0 {
-            v[2]
-        } else {
-            v[1]
-        }
-    });
+    m.insert(
+        "if".to_string(),
+        BuiltinLazy(
+            Box::new(|v, s| {
+                Ok(if v[0].evaluate(s)? != 0.0 {
+                    v[1].evaluate(s)?
+                } else {
+                    v[2].evaluate(s)?
+                })
+            }),
+            3,
+        ),
+    );
     Ok(m)
 }
 
@@ -518,7 +550,8 @@ fn clean_environment<'a>(
 ) -> HashMap<&String, &Identifier> {
     env.iter()
         .filter(|(_, v)| match v {
-            Builtin(_, _) => false,
+            Builtin(..) => false,
+            BuiltinLazy(..) => false,
             _ => true,
         })
         .collect()
@@ -572,6 +605,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                         Function(..) => println!("\t{:-10} = (function)", k),
                         Builtin(..) => {
                             println!("\t{:-10} = (built-in function)", k)
+                        }
+                        BuiltinLazy(..) => {
+                            println!("\t{:-10} = (lazy built-in function)", k)
                         }
                     }
                 }

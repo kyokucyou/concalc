@@ -11,6 +11,7 @@ Console calculator written in Rust.
   - logarithm (for ln, pass only 1 parameter to log)
 - basic 4 arithmetic operations and exponentiation, respecting precedence
 - ability to save and load environment including user-defined variables and functions
+- lazy evaluation of function parameters of certain built-in functions, such as "if", in order to enable recursive function definitions
 
 ### Planned features
 - ...
