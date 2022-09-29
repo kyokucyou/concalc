@@ -2,7 +2,6 @@
 
 use crate::{Either::*, Identifier::*};
 use serde::{Deserialize, Serialize};
-
 use std::{
     clone::Clone,
     collections::HashMap,
@@ -25,7 +24,7 @@ struct ParseError {
     msg: String,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 enum Token {
     Call(String, Vec<Node>),
     Identifier(String),
@@ -39,6 +38,7 @@ enum Token {
     Asterisk,
     Slash,
     Caret,
+    Percent,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -93,7 +93,8 @@ impl Token {
             | Token::Minus
             | Token::Asterisk
             | Token::Slash
-            | Token::Caret => true,
+            | Token::Caret
+            | Token::Percent => true,
             _ => false,
         }
     }
@@ -213,6 +214,7 @@ impl Node {
                     Token::Minus => lhs - rhs,
                     Token::Asterisk => lhs * rhs,
                     Token::Slash => lhs / rhs,
+                    Token::Percent => lhs % rhs,
                     Token::Caret => lhs.powf(rhs),
                     _ => return Err("invalid operator".to_string()),
                 })
@@ -337,6 +339,7 @@ impl<'a> Parser<'a> {
                 '*' => Token::Asterisk,
                 '/' => Token::Slash,
                 '^' => Token::Caret,
+                '%' => Token::Percent,
                 _ => return Err(Box::new(ParseError::new("bad char"))),
             }
         };
@@ -529,6 +532,20 @@ fn create_environment() -> Result<Environment, Box<dyn Error>> {
     def_fn!(m, "max", 0, |v| v
         .iter()
         .fold(f64::NEG_INFINITY, |a, &b| { f64::max(a, b) }));
+    def_fn!(m, "le", 2, |v| {
+        if v[0] <= v[1] {
+            1.0
+        } else {
+            0.0
+        }
+    });
+    def_fn!(m, "not", 1, |v| {
+        if v[0] == 0.0 {
+            1.0
+        } else {
+            0.0
+        }
+    });
     m.insert(
         "if".to_string(),
         BuiltinLazy(
@@ -549,9 +566,9 @@ fn clean_environment<'a>(
     env: &'a Environment,
 ) -> HashMap<&String, &Identifier> {
     env.iter()
+        .filter(|(k, _)| *k != "ans")
         .filter(|(_, v)| match v {
-            Builtin(..) => false,
-            BuiltinLazy(..) => false,
+            Builtin(..) | BuiltinLazy(..) => false,
             _ => true,
         })
         .collect()
