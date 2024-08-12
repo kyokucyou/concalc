@@ -1,6 +1,7 @@
 // Copyright (C) 2022 kyokucyou
 
 use crate::{Either::*, Identifier::*};
+use rustyline::{history::MemHistory, Config, Editor};
 use serde::{Deserialize, Serialize};
 use std::{
     clone::Clone,
@@ -9,7 +10,7 @@ use std::{
     f64::consts::{E, PI},
     fmt::{self, Display, Formatter},
     fs::File,
-    io::{self, stdin, stdout, BufRead, BufReader, Write},
+    io::{BufRead, BufReader, Write},
     iter::from_fn,
     str::{Chars, FromStr},
 };
@@ -595,23 +596,13 @@ fn read_file(
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let stdin = stdin().lock();
-    let mut stdout = stdout();
-    let mut lines = stdin.lines();
+    let mut rl: Editor<(), _> =
+        Editor::with_history(Config::default(), MemHistory::default())?;
     let mut environment = create_environment()?;
-    let mut prompt = move |p| {
-        print!("{}", p);
-        stdout.flush()?;
-        let name = lines.next();
-        match name {
-            Some(s) => Ok::<_, io::Error>(Some(s?)),
-            _ => Ok(None),
-        }
-    };
     println!("Welcome to the console calculator! Enter \".quit\" to quit.");
     loop {
-        let line = match prompt("> ")? {
-            Some(l) => l,
+        let line = match rl.readline("> ") {
+            Ok(l) => l,
             _ => break,
         };
         match line.as_str() {
@@ -637,7 +628,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 continue;
             }
             ".source" => {
-                if let Some(filename) = prompt("Filename? ")? {
+                if let Ok(filename) = rl.readline("Filename? ") {
                     match read_file(filename, &mut environment) {
                         Err(e) => println!("Error while reading file: {}", e),
                         _ => println!("File sourced successfully."),
@@ -647,7 +638,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 break;
             }
             ".save" => {
-                if let Some(filename) = prompt("Filename? ")? {
+                if let Ok(filename) = rl.readline("Filename? ") {
                     let env = clean_environment(&environment);
                     let json = serde_json::to_string_pretty(&env)?;
                     let mut file = File::create(filename)?;
@@ -657,7 +648,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 break;
             }
             ".load" => {
-                if let Some(filename) = prompt("Filename? ")? {
+                if let Ok(filename) = rl.readline("Filename? ") {
                     let file = File::open(filename)?;
                     let file = BufReader::new(file);
                     let env: Environment = serde_json::from_reader(file)?;
@@ -668,10 +659,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             _ => {}
         }
+        rl.add_history_entry(line.as_str())?;
         let mut parser = Parser::new(&line, &mut environment);
         match parser.parse_ast() {
             Ok(Some(x)) => {
-                println!("Result: {}", x);
+                println!("{}", x);
                 parser.var_map.insert("ans".to_string(), Variable(x));
                 if !parser.is_eof() {
                     println!("Warning: superfluous input is ignored.");
