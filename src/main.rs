@@ -5,6 +5,7 @@ use itertools::Itertools;
 use rustyline::{history::MemHistory, Config, Editor};
 use serde::{Deserialize, Serialize};
 use std::{
+    cell::Cell,
     clone::Clone,
     collections::HashMap,
     error::Error,
@@ -52,6 +53,8 @@ struct Node {
 #[derive(Serialize, Deserialize)]
 enum Identifier {
     Variable(f64),
+    #[serde(skip)]
+    MutableVariable(Cell<f64>),
     Function(Node, Vec<String>),
     #[serde(skip)]
     Builtin(Box<dyn Fn(Vec<f64>) -> f64>, usize),
@@ -105,7 +108,10 @@ impl Token {
 
 impl Node {
     fn new(tok: Token, left: Node, right: Node) -> Self {
-        Self { tok, children: vec![left, right] }
+        Self {
+            tok,
+            children: vec![left, right],
+        }
     }
 
     fn new_maybe(tok: Token, left: Option<Node>, right: Option<Node>) -> Self {
@@ -183,10 +189,11 @@ impl Node {
                     _ => Err(format!("not a function: '{}'", id)),
                 }
             }
-            Token::Identifier(id) => Ok(*scopes
+            Token::Identifier(id) => Ok(scopes
                 .iter()
                 .filter_map(|m| match m.get(id) {
-                    Some(Variable(x)) => Some(x),
+                    Some(&Variable(x)) => Some(x),
+                    Some(MutableVariable(c)) => Some(c.get()),
                     _ => None,
                 })
                 .last()
@@ -289,7 +296,7 @@ impl<'a> Parser<'a> {
         let s = from_fn(|| {
             last = self.peek_char();
             match self.read_char() {
-                Some(ch) if f(ch) => Some(ch),
+                c @ Some(ch) if f(ch) => c,
                 _ => None,
             }
         })
@@ -553,6 +560,34 @@ fn create_environment() -> Result<Environment, Box<dyn Error>> {
             3,
         ),
     );
+    m.insert(
+        "fold".to_string(),
+        BuiltinLazy(
+            Box::new(|v, s| {
+                let expr = &v[0];
+                let mut acc = v[1].evaluate(s)?;
+                let mut scopes = s.clone();
+                let mut env = Environment::new();
+                env.insert("acc".to_string(), MutableVariable(Cell::new(acc)));
+                env.insert("cur".to_string(), MutableVariable(Cell::new(0.0)));
+                scopes.push(&env);
+                for item in v.iter().skip(2) {
+                    let cur = item.evaluate(s)?;
+                    env.get("cur").map(|x| match x {
+                        MutableVariable(c) => c.set(cur),
+                        _ => {}
+                    });
+                    acc = expr.evaluate(&scopes)?;
+                    env.get("acc").map(|x| match x {
+                        MutableVariable(c) => c.set(acc),
+                        _ => {}
+                    });
+                }
+                Ok(acc)
+            }),
+            2,
+        ),
+    );
     Ok(m)
 }
 
@@ -560,10 +595,12 @@ fn clean_environment<'a>(
     env: &'a Environment,
 ) -> MapType<&String, &Identifier> {
     env.iter()
-        .filter(|(k, _)| *k != "ans")
-        .filter(|(_, v)| match v {
-            Builtin(..) | BuiltinLazy(..) => false,
-            _ => true,
+        .filter(|(k, v)| {
+            *k != "ans"
+                && match v {
+                    Builtin(..) | BuiltinLazy(..) => false,
+                    _ => true,
+                }
         })
         .collect()
 }
@@ -603,6 +640,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 for (k, v) in environment.iter().sorted_by_key(|x| x.0) {
                     match v {
                         Variable(v) => println!("\t{:-10} = {}", k, v),
+                        MutableVariable(v) => {
+                            println!("\t{:-10} = {}", k, v.get())
+                        }
                         Function(..) => println!("\t{:-10} = (function)", k),
                         Builtin(..) => {
                             println!("\t{:-10} = (built-in function)", k)
