@@ -1,6 +1,7 @@
 // Copyright (C) 2022 kyokucyou
 
 use crate::{Either::*, Identifier::*};
+use itertools::Itertools;
 use rustyline::{history::MemHistory, Config, Editor};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -10,7 +11,7 @@ use std::{
     f64::consts::{E, PI},
     fmt::{self, Display, Formatter},
     fs::File,
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, BufWriter, Write},
     iter::from_fn,
     str::{Chars, FromStr},
 };
@@ -45,7 +46,7 @@ enum Token {
 #[derive(Debug, Serialize, Deserialize)]
 struct Node {
     tok: Token,
-    children: Vec<Box<Node>>,
+    children: Vec<Node>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -69,7 +70,8 @@ enum Identifier {
 type ParseResult = Result<f64, Box<dyn Error>>;
 type NodeResult = Result<Node, Box<dyn Error>>;
 
-type Environment = HashMap<String, Identifier>;
+type MapType<K, V> = HashMap<K, V>;
+type Environment = MapType<String, Identifier>;
 
 struct Parser<'a> {
     chars: Chars<'a>,
@@ -102,18 +104,11 @@ impl Token {
 }
 
 impl Node {
-    fn new(tok: Token, left: Box<Node>, right: Box<Node>) -> Self {
-        let mut v = Vec::new();
-        v.push(left);
-        v.push(right);
-        Self { tok, children: v }
+    fn new(tok: Token, left: Node, right: Node) -> Self {
+        Self { tok, children: vec![left, right] }
     }
 
-    fn new_maybe(
-        tok: Token,
-        left: Option<Box<Node>>,
-        right: Option<Box<Node>>,
-    ) -> Self {
+    fn new_maybe(tok: Token, left: Option<Node>, right: Option<Node>) -> Self {
         let mut v = Vec::new();
         if let Some(n) = left {
             v.push(n);
@@ -348,11 +343,9 @@ impl<'a> Parser<'a> {
     }
 
     fn lex_some(&mut self) -> Result<Token, Box<dyn Error>> {
-        if let Some(tok) = self.lex()? {
-            Ok(tok)
-        } else {
-            Err(Box::new(ParseError::new("unexpected EOF")))
-        }
+        Ok(self
+            .lex()?
+            .ok_or_else(|| Box::new(ParseError::new("unexpected EOF")))?)
     }
 
     fn lex_record<'b>(
@@ -413,7 +406,7 @@ impl<'a> Parser<'a> {
             }
             Token::Minus => {
                 let x = self.parse_primary_ast()?;
-                Ok(Node::new_maybe(tok, Some(Box::new(x)), None))
+                Ok(Node::new_maybe(tok, Some(x), None))
             }
             _ => Err(Box::new(ParseError::new("expected primary"))),
         }
@@ -434,7 +427,7 @@ impl<'a> Parser<'a> {
                         break;
                     }
                     let rhs = self.parse_expression_ast(prec + 1)?;
-                    lhs = Node::new(tok, Box::new(lhs), Box::new(rhs));
+                    lhs = Node::new(tok, lhs, rhs);
                 }
                 _ => break,
             }
@@ -517,7 +510,7 @@ macro_rules! def_fn {
 }
 
 fn create_environment() -> Result<Environment, Box<dyn Error>> {
-    let mut m = HashMap::new();
+    let mut m = MapType::new();
     m.insert("e".into(), Variable(E));
     m.insert("pi".into(), Variable(PI));
     def_fn!(m, "ln", 1, |v| v[0].ln());
@@ -565,7 +558,7 @@ fn create_environment() -> Result<Environment, Box<dyn Error>> {
 
 fn clean_environment<'a>(
     env: &'a Environment,
-) -> HashMap<&String, &Identifier> {
+) -> MapType<&String, &Identifier> {
     env.iter()
         .filter(|(k, _)| *k != "ans")
         .filter(|(_, v)| match v {
@@ -607,7 +600,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         };
         match line.as_str() {
             ".env" => {
-                for (k, v) in environment.iter() {
+                for (k, v) in environment.iter().sorted_by_key(|x| x.0) {
                     match v {
                         Variable(v) => println!("\t{:-10} = {}", k, v),
                         Function(..) => println!("\t{:-10} = (function)", k),
@@ -640,9 +633,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             ".save" => {
                 if let Ok(filename) = rl.readline("Filename? ") {
                     let env = clean_environment(&environment);
-                    let json = serde_json::to_string_pretty(&env)?;
-                    let mut file = File::create(filename)?;
-                    writeln!(file, "{}", json)?;
+                    let file = File::create(filename)?;
+                    let mut writer = BufWriter::new(file);
+                    serde_json::to_writer(&mut writer, &env)?;
+                    writer.flush()?;
                     continue;
                 }
                 break;
