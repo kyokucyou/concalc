@@ -516,6 +516,12 @@ macro_rules! def_fn {
     };
 }
 
+macro_rules! def_fn_lazy {
+    ($env:ident, $name:literal, $n_args:literal, $expr:expr) => {
+        $env.insert($name.into(), BuiltinLazy(Box::new($expr), $n_args));
+    };
+}
+
 fn create_environment() -> Result<Environment, Box<dyn Error>> {
     let mut m = MapType::new();
     m.insert("e".into(), Variable(E));
@@ -547,47 +553,35 @@ fn create_environment() -> Result<Environment, Box<dyn Error>> {
             0.0
         }
     });
-    m.insert(
-        "if".to_string(),
-        BuiltinLazy(
-            Box::new(|v, s| {
-                Ok(if v[0].evaluate(s)? != 0.0 {
-                    v[1].evaluate(s)?
-                } else {
-                    v[2].evaluate(s)?
-                })
-            }),
-            3,
-        ),
-    );
-    m.insert(
-        "fold".to_string(),
-        BuiltinLazy(
-            Box::new(|v, s| {
-                let expr = &v[0];
-                let mut acc = v[1].evaluate(s)?;
-                let mut scopes = s.clone();
-                let mut env = Environment::new();
-                env.insert("acc".to_string(), MutableVariable(Cell::new(acc)));
-                env.insert("cur".to_string(), MutableVariable(Cell::new(0.0)));
-                scopes.push(&env);
-                for item in v.iter().skip(2) {
-                    let cur = item.evaluate(s)?;
-                    env.get("cur").map(|x| match x {
-                        MutableVariable(c) => c.set(cur),
-                        _ => {}
-                    });
-                    acc = expr.evaluate(&scopes)?;
-                    env.get("acc").map(|x| match x {
-                        MutableVariable(c) => c.set(acc),
-                        _ => {}
-                    });
-                }
-                Ok(acc)
-            }),
-            2,
-        ),
-    );
+    def_fn_lazy!(m, "if", 3, |v, s| {
+        Ok(if v[0].evaluate(s)? != 0.0 {
+            v[1].evaluate(s)?
+        } else {
+            v[2].evaluate(s)?
+        })
+    });
+    def_fn_lazy!(m, "fold", 2, |v, s| {
+        fn update(env: &Environment, var: &str, val: f64) {
+            env.get(var).map(|x| match x {
+                MutableVariable(c) => c.set(val),
+                _ => {}
+            });
+        }
+        let expr = &v[0];
+        let mut acc = v[1].evaluate(s)?;
+        let mut scopes = s.clone();
+        let mut env = Environment::new();
+        env.insert("acc".to_string(), MutableVariable(Cell::new(acc)));
+        env.insert("cur".to_string(), MutableVariable(Cell::new(0.0)));
+        scopes.push(&env);
+        for item in v.iter().skip(2) {
+            let cur = item.evaluate(s)?;
+            update(&env, "cur", cur);
+            acc = expr.evaluate(&scopes)?;
+            update(&env, "acc", acc);
+        }
+        Ok(acc)
+    });
     Ok(m)
 }
 
