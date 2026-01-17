@@ -585,8 +585,8 @@ fn create_environment() -> Result<Environment, Box<dyn Error>> {
     Ok(m)
 }
 
-fn clean_environment<'a>(
-    env: &'a Environment,
+fn clean_environment(
+    env: &Environment,
 ) -> MapType<&String, &Identifier> {
     env.iter()
         .filter(|(k, v)| {
